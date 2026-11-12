@@ -1,0 +1,51 @@
+<?xml version="1.0" ?>
+<!DOCTYPE PubmedArticleSet PUBLIC "-//NLM//DTD PubMedArticle, 1st January 2024//EN" "https://dtd.nlm.nih.gov/ncbi/pubmed/out/pubmed_240101.dtd">
+<PubmedArticleSet>
+  <PubmedArticle>
+    <MedlineCitation Status="MEDLINE" Owner="NLM">
+      <PMID Version="1">11111111</PMID>
+      <Article PubModel="Print">
+        <Journal>
+          <JournalIssue CitedMedium="Internet">
+            <PubDate><Year>2015</Year><Month>Jun</Month></PubDate>
+          </JournalIssue>
+          <Title>Fixture Journal</Title>
+        </Journal>
+        <ArticleTitle>A structured abstract with <i>italic</i> text inside.</ArticleTitle>
+        <Abstract>
+          <AbstractText Label="BACKGROUND" NlmCategory="BACKGROUND">Background text.</AbstractText>
+          <AbstractText Label="METHODS" NlmCategory="METHODS">Methods text.</AbstractText>
+          <AbstractText Label="RESULTS" NlmCategory="RESULTS">Results with <sub>subscript</sub>.</AbstractText>
+          <AbstractText Label="CONCLUSIONS" NlmCategory="CONCLUSIONS">Conclusion text.</AbstractText>
+        </Abstract>
+      </Article>
+    </MedlineCitation>
+  </PubmedArticle>
+  <PubmedArticle>
+    <MedlineCitation Status="MEDLINE" Owner="NLM">
+      <PMID Version="1">22222222</PMID>
+      <Article PubModel="Print">
+        <Journal>
+          <JournalIssue><PubDate><Year>2010</Year></PubDate></JournalIssue>
+          <Title>Another Fixture Journal</Title>
+        </Journal>
+        <ArticleTitle>An unstructured abstract.</ArticleTitle>
+        <Abstract>
+          <AbstractText>One paragraph of abstract text without section labels.</AbstractText>
+        </Abstract>
+      </Article>
+    </MedlineCitation>
+  </PubmedArticle>
+  <PubmedArticle>
+    <MedlineCitation Status="MEDLINE" Owner="NLM">
+      <PMID Version="1">33333333</PMID>
+      <Article PubModel="Print">
+        <Journal>
+          <JournalIssue><PubDate><MedlineDate>1998 Mar-Apr</MedlineDate></PubDate></JournalIssue>
+          <Title>Old Fixture Journal</Title>
+        </Journal>
+        <ArticleTitle>A record without an abstract.</ArticleTitle>
+      </Article>
+    </MedlineCitation>
+  </PubmedArticle>
+</PubmedArticleSet>
