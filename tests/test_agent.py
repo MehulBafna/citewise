@@ -205,3 +205,14 @@ async def test_nothing_found_gives_insufficient_evidence_without_a_model_answer(
     )
     assert result.answer.verdict == "insufficient_evidence"
     assert "answer" not in llm.calls
+
+
+async def test_progress_messages_describe_each_step() -> None:
+    messages: list[str] = []
+    llm = FakeLLM(research=[SEARCH], answers=[good_answer("90000003")])
+    agent = CitewiseAgent(llm, InProcessToolbox(), settings(), progress=messages.append)
+    await agent.run("Does vitamin D supplementation reduce hip fracture risk?")
+    assert messages[0] == "Checking the question"
+    assert "Searching PubMed: vitamin D hip fracture" in messages
+    assert any(m.startswith("Writing the answer from") for m in messages)
+    assert messages[-1] == "Checking every citation against its source"

@@ -15,7 +15,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
 
 from citewise.config import server_environment
-from citewise.mcp_server import POLICY_PARAMS
+from citewise.guardrails import POLICY_PARAMS
 
 
 class Toolbox(Protocol):

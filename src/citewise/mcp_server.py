@@ -12,21 +12,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import threading
 from functools import lru_cache
 
 from mcp.server.fastmcp import FastMCP
 
 from citewise.config import Settings, load_env_file
+from citewise.guardrails import POLICY_PARAMS  # noqa: F401  (re-exported for MCP clients)
 from citewise.index import EvidenceIndex, FastEmbedEmbedder, HashEmbedder
 from citewise.papers import Paper, Section
 from citewise.pubmed import OfflinePubMed, PaperSource, PubMedClient
 
-POLICY_PARAMS = ("exclude_pmids", "max_year")
 SNIPPET_CHARS = 280
 
 mcp = FastMCP(
     "citewise",
+    log_level=os.environ.get("CITEWISE_MCP_LOG_LEVEL", "WARNING"),  # INFO logs every request
     instructions=(
         "Biomedical literature tools backed by PubMed. Search first, then read abstracts or search "
         "the evidence index for passages that answer the question."

@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from typing import Annotated, Any, TypedDict
@@ -31,6 +32,7 @@ from langgraph.graph.message import add_messages
 from citewise.config import Settings
 from citewise.guardrails import (
     DISCLAIMER,
+    POLICY_PARAMS,
     REFUSALS,
     EvidencePolicy,
     check_input,
@@ -38,7 +40,6 @@ from citewise.guardrails import (
     wrap_document,
 )
 from citewise.llm import LLM, RESEARCH_SYSTEM
-from citewise.mcp_server import POLICY_PARAMS
 from citewise.schemas import Answer
 from citewise.toolbox import Toolbox
 from citewise.tracing import Trace, current_trace, log_event
@@ -166,11 +167,28 @@ class AgentResult:
         }
 
 
+def describe_tool_call(name: str, args: dict[str, Any]) -> str:
+    if name == "search_pubmed":
+        return f"Searching PubMed: {args.get('query', '')}"
+    if name == "get_abstracts":
+        return f"Reading {len(args.get('pmids') or [])} abstract(s)"
+    if name == "search_evidence":
+        return "Searching the evidence index for the most relevant passages"
+    return f"Calling {name}"
+
+
 class CitewiseAgent:
-    def __init__(self, llm: LLM, toolbox: Toolbox, settings: Settings | None = None) -> None:
+    def __init__(
+        self,
+        llm: LLM,
+        toolbox: Toolbox,
+        settings: Settings | None = None,
+        progress: Callable[[str], None] | None = None,
+    ) -> None:
         self.llm = llm
         self.toolbox = toolbox
         self.settings = settings or Settings()
+        self.progress = progress or (lambda message: None)
         self.graph = self._build()
 
     # graph ----------------------------------------------------------------------------------
@@ -218,6 +236,7 @@ class CitewiseAgent:
         return {"status": "running"}
 
     async def triage(self, state: State) -> dict[str, Any]:
+        self.progress("Checking the question")
         with _step("triage") as info:
             triage = await self.llm.triage(state["question"])
             info["category"] = triage.category
@@ -237,6 +256,7 @@ class CitewiseAgent:
         }
 
     async def research(self, state: State) -> dict[str, Any]:
+        self.progress("Planning the next search" if state.get("tool_calls_used") else "Planning the research")
         with _step("research"):
             reply = await self.llm.research(state["messages"], self.toolbox.specs())
         return {"messages": [reply]}
@@ -246,6 +266,7 @@ class CitewiseAgent:
     ) -> tuple[str, dict, list[dict[str, Any]]]:
         policy = state["policy"]
         args = {k: v for k, v in model_args.items() if k not in POLICY_PARAMS}
+        self.progress(describe_tool_call(name, args))
         with _step(f"tool:{name}") as info:
             raw = await self.toolbox.call(name, {**args, **policy.tool_args()})
             items = parse_items(raw)
@@ -311,6 +332,10 @@ class CitewiseAgent:
                 claims=[],
             )
             return {"answer": empty, "attempts": attempts}
+        if attempts == 1:
+            self.progress(f"Writing the answer from {min(len(evidence), MAX_DOCUMENTS)} papers")
+        else:
+            self.progress("Rewriting the answer to fix its citations")
         with _step("answer") as info:
             info["attempt"] = attempts
             answer = await self.llm.answer(
@@ -330,6 +355,7 @@ class CitewiseAgent:
     async def verify(self, state: State) -> dict[str, Any]:
         answer = state["answer"]
         evidence = state.get("evidence", {})
+        self.progress("Checking every citation against its source")
         with _step("verify") as info:
             problems = validate_answer(answer, set(evidence), state["policy"])
             bad = {p.index for p in problems}

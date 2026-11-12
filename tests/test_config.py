@@ -40,3 +40,16 @@ def test_env_file_is_loaded_but_never_overrides_the_real_environment(
     assert os.environ["CITEWISE_TEST_BOTH"] == "shell"
     monkeypatch.delenv("CITEWISE_TEST_FROM_FILE")
     load_env_file(str(tmp_path / "missing.env"))  # no file: nothing happens
+
+
+def test_client_code_does_not_load_the_mcp_server() -> None:
+    """Building the server object switches on its INFO logging, which floods the client's terminal."""
+    import subprocess
+    import sys
+
+    code = (
+        "import logging, sys, citewise.cli, citewise.eval.cli, citewise.api, citewise.toolbox; "
+        "print('citewise.mcp_server' in sys.modules, len(logging.getLogger().handlers))"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "False 0"

@@ -61,6 +61,10 @@ def check_input(question: str) -> InputCheck:
     return InputCheck(True)
 
 
+# Tool parameters set from the evidence policy. The agent fills them in and hides them from the model.
+POLICY_PARAMS = ("exclude_pmids", "max_year")
+
+
 @dataclass(frozen=True)
 class EvidencePolicy:
     """What the agent may read. The evaluation uses it to keep the answer's own paper out of reach."""

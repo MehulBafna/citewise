@@ -9,6 +9,9 @@ import argparse
 import asyncio
 import json
 import logging
+import sys
+import time
+from collections.abc import Callable
 
 from citewise.agent import CitewiseAgent
 from citewise.config import Settings, load_env_file
@@ -16,11 +19,25 @@ from citewise.guardrails import DISCLAIMER
 from citewise.llm import ClaudeLLM
 from citewise.toolbox import MCPToolbox
 
+QUIET_LOGGERS = ("httpx", "httpx2", "httpcore", "httpcore2", "anthropic", "mcp", "langchain")
+
+
+def _progress_printer() -> Callable[[str], None]:
+    start = time.perf_counter()
+
+    def show(message: str) -> None:
+        print(f"  {time.perf_counter() - start:5.1f}s  {message}", file=sys.stderr, flush=True)
+
+    return show
+
 
 async def _ask(question: str, as_json: bool) -> None:
     settings = Settings()
+    progress = _progress_printer()
+    progress(f"Starting (main model {settings.model}); a question usually takes a minute or two")
     async with MCPToolbox() as toolbox:
-        result = await CitewiseAgent(ClaudeLLM(settings), toolbox, settings).run(question)
+        agent = CitewiseAgent(ClaudeLLM(settings), toolbox, settings, progress=progress)
+        result = await agent.run(question)
     if as_json:
         print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
         return
@@ -53,6 +70,9 @@ def main() -> None:
     parser.add_argument("--verbose", action="store_true", help="show step logs")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="%(message)s")
+    if not args.verbose:
+        for name in QUIET_LOGGERS:
+            logging.getLogger(name).setLevel(logging.WARNING)
     asyncio.run(_ask(args.question, args.json))
 
 
