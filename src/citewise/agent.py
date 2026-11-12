@@ -40,7 +40,8 @@ from citewise.guardrails import (
     wrap_document,
 )
 from citewise.llm import LLM, RESEARCH_SYSTEM
-from citewise.schemas import Answer
+from citewise.queries import keyword_query
+from citewise.schemas import STUDY_ANSWERS, Answer
 from citewise.toolbox import Toolbox
 from citewise.tracing import Trace, current_trace, log_event
 
@@ -50,6 +51,10 @@ MAX_CITED_CHARS = 1500
 GATHER_K = 10
 TOOL_TEXT_LIMIT = 4000
 ANSWERED_VERDICTS = ("yes", "no", "maybe", "not_applicable")
+KEYWORD_TOP = 3  # full abstracts are read for this many top keyword-search results
+# Bumped whenever the agent's behaviour changes, so evaluation results of versions never mix.
+AGENT_VERSION = "a2"
+RESULT_LIMITS = {"search_pubmed": ("max_results", 8), "search_evidence": ("k", 8)}
 
 
 class State(TypedDict, total=False):
@@ -85,17 +90,23 @@ def parse_items(raw: str) -> list[dict[str, Any]] | None:
 
 
 def merge_evidence(
-    evidence: dict[str, dict[str, Any]], items: list[dict[str, Any]], policy: EvidencePolicy
+    evidence: dict[str, dict[str, Any]],
+    items: list[dict[str, Any]],
+    policy: EvidencePolicy,
+    limit: int | None = None,
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
-    """Add tool results to the evidence, dropping anything the policy does not allow."""
+    """Add tool results to the evidence, dropping anything the policy does not allow and masking
+    what it says to mask. Keeps at most `limit` results."""
     merged = {pmid: {**doc, "passages": dict(doc["passages"])} for pmid, doc in evidence.items()}
-    kept = []
-    for item in items:
-        pmid = str(item.get("pmid", ""))
+    allowed = [
+        policy.mask(item)
+        for item in items
+        if item.get("pmid") and policy.allows(str(item["pmid"]), item.get("year"))
+    ]
+    kept = allowed[:limit] if limit is not None else allowed
+    for item in kept:
+        pmid = str(item["pmid"])
         year = item.get("year")
-        if not pmid or not policy.allows(pmid, year):
-            continue
-        kept.append(item)
         doc = merged.setdefault(
             pmid,
             {
@@ -267,15 +278,22 @@ class CitewiseAgent:
         policy = state["policy"]
         args = {k: v for k, v in model_args.items() if k not in POLICY_PARAMS}
         self.progress(describe_tool_call(name, args))
+        call_args = {**args, **policy.tool_args()}
+        limit = None
+        if name in RESULT_LIMITS and policy.max_year is not None and not policy.filters_years_on_server:
+            # The agent filters by year itself here, so ask for more results to keep enough.
+            key, default = RESULT_LIMITS[name]
+            limit = int(args.get(key, default))
+            call_args[key] = min(20, limit * 2)
         with _step(f"tool:{name}") as info:
-            raw = await self.toolbox.call(name, {**args, **policy.tool_args()})
+            raw = await self.toolbox.call(name, call_args)
             items = parse_items(raw)
             if items is None:
                 info["error"] = True
                 content = raw[:TOOL_TEXT_LIMIT]
                 kept: list[dict[str, Any]] = []
             else:
-                evidence, kept = merge_evidence(evidence, items, policy)
+                evidence, kept = merge_evidence(evidence, items, policy, limit)
                 info["results"] = len(kept)
                 info["dropped_by_policy"] = len(items) - len(kept)
                 content = json.dumps(kept, ensure_ascii=False)
@@ -304,10 +322,21 @@ class CitewiseAgent:
                 _, evidence, _ = await self._call_tool(
                     "search_pubmed", {"query": query, "max_results": 8}, state, evidence
                 )
+        # A fixed keyword search, whatever the model searched for: plain keyword queries find the
+        # study a question describes far more reliably than free-form ones.
+        top: list[str] = []
+        keywords = keyword_query(state["question"])
+        if keywords:
+            _, evidence, found = await self._call_tool(
+                "search_pubmed", {"query": keywords, "max_results": 8}, state, evidence
+            )
+            top = [str(item["pmid"]) for item in found[:KEYWORD_TOP]]
+            if top:
+                _, evidence, _ = await self._call_tool("get_abstracts", {"pmids": top}, state, evidence)
         _, evidence, kept = await self._call_tool(
             "search_evidence", {"question": state["question"], "k": GATHER_K}, state, evidence
         )
-        order = list(dict.fromkeys(str(item["pmid"]) for item in kept))
+        order = list(dict.fromkeys(top + [str(item["pmid"]) for item in kept]))
         return {"evidence": evidence, "gather_order": order}
 
     def _format_evidence(self, evidence: dict[str, dict], order: list[str]) -> str:
@@ -327,6 +356,8 @@ class CitewiseAgent:
         evidence = state.get("evidence", {})
         if not evidence:
             empty = Answer(
+                primary_pmid=None,
+                study_verdict="no_matching_study",
                 verdict="insufficient_evidence",
                 summary="No relevant evidence was found in PubMed.",
                 claims=[],
@@ -352,6 +383,22 @@ class CitewiseAgent:
             if pmid in evidence
         )
 
+    @staticmethod
+    def _study_problems(answer: Answer, evidence: dict[str, dict], policy: EvidencePolicy) -> list[str]:
+        """The study verdict must point at a retrieved paper and be backed by a claim citing it."""
+        primary = answer.primary_pmid
+        if primary is None:
+            if answer.study_verdict != "no_matching_study":
+                return [
+                    "study_verdict needs a primary_pmid; use no_matching_study if no document is that study."
+                ]
+            return []
+        if primary not in evidence or primary in policy.exclude_pmids:
+            return [f"primary_pmid {primary} is not one of the evidence documents."]
+        if answer.study_verdict in STUDY_ANSWERS and not any(primary in c.pmids for c in answer.claims):
+            return [f"The study verdict is not backed by any claim citing PMID {primary}."]
+        return []
+
     async def verify(self, state: State) -> dict[str, Any]:
         answer = state["answer"]
         evidence = state.get("evidence", {})
@@ -362,6 +409,7 @@ class CitewiseAgent:
             notes = [f"Claim {p.index}: {p.problem}" for p in problems]
             if answer.verdict in ANSWERED_VERDICTS and not answer.claims:
                 notes.append("The verdict is not backed by any cited claim.")
+            notes += self._study_problems(answer, evidence, state["policy"])
             to_check = [(i, c) for i, c in enumerate(answer.claims) if i not in bad]
             if self.settings.check_support and to_check:
                 report = await self.llm.check_support(
@@ -383,14 +431,28 @@ class CitewiseAgent:
         removed = [
             {"statement": c.statement, "pmids": c.pmids} for i, c in enumerate(answer.claims) if i in bad
         ]
+        primary, study = answer.primary_pmid, answer.study_verdict
+        backed = (
+            primary is not None
+            and study in STUDY_ANSWERS
+            and primary in evidence
+            and primary not in state["policy"].exclude_pmids
+            and any(primary in c.pmids for c in kept)
+        )
+        if not backed:
+            primary, study = None, "no_matching_study"
         if kept:
             final = Answer(
+                primary_pmid=primary,
+                study_verdict=study,
                 verdict=answer.verdict,
-                summary=" ".join(c.statement for c in kept),
+                summary=answer.summary if not removed else " ".join(c.statement for c in kept),
                 claims=kept,
             )
         else:
             final = Answer(
+                primary_pmid=None,
+                study_verdict="no_matching_study",
                 verdict="insufficient_evidence",
                 summary="The evidence found did not support a verifiable answer.",
                 claims=[],

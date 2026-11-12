@@ -45,7 +45,11 @@ async def _ask(question: str, as_json: bool) -> None:
         print(result.refusal)
         return
     answer = result.answer
-    print(f"\nVerdict: {answer.verdict}\n\n{answer.summary}\n")
+    if answer.primary_pmid:
+        print(f"\nThis study (PMID {answer.primary_pmid}): {answer.study_verdict}")
+        print(f"Wider evidence: {answer.verdict}\n\n{answer.summary}\n")
+    else:
+        print(f"\nVerdict: {answer.verdict}\n\n{answer.summary}\n")
     for claim in answer.claims:
         print(f"- {claim.statement} [PMID {', '.join(claim.pmids)}]")
     if result.sources():

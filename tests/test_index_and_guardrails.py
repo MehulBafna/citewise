@@ -69,6 +69,8 @@ def test_documents_cannot_close_their_own_wrapper() -> None:
 def test_citation_validation() -> None:
     policy = EvidencePolicy(exclude_pmids=frozenset({"9"}))
     answer = Answer(
+        primary_pmid=None,
+        study_verdict="no_matching_study",
         verdict="yes",
         summary="s",
         claims=[
@@ -94,3 +96,19 @@ def test_policy_tool_args_and_year_rule() -> None:
     assert policy.allows("3", 2010) and not policy.allows("3", 2011)
     assert not policy.allows("3", None)  # unknown year is not allowed under a year limit
     assert not policy.allows("1", 2000)
+
+
+def test_masked_papers_are_allowed_but_rewritten() -> None:
+    policy = EvidencePolicy(max_year=2010, masked={"7": "hidden conclusion version"})
+    assert policy.allows("7", 2015) and not policy.allows("8", 2015)
+    assert policy.tool_args() == {}  # no server-side date filter: the masked paper may be newer
+    item = {"pmid": "7", "title": "T", "abstract": "full text with conclusion", "year": 2015}
+    assert policy.mask(item)["abstract"] == "hidden conclusion version"
+    passage = {"pmid": "7", "section": "CONCLUSIONS", "text": "the conclusion"}
+    assert policy.mask(passage) == {
+        "pmid": "7",
+        "section": "ABSTRACT WITHOUT CONCLUSION",
+        "text": "hidden conclusion version",
+    }
+    assert policy.mask({"pmid": "8", "text": "x"}) == {"pmid": "8", "text": "x"}
+    assert EvidencePolicy(max_year=2010).tool_args() == {"max_year": 2010}

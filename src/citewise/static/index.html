@@ -21,12 +21,13 @@
   .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:18px 20px; margin-top:16px; }
   .verdict { display:inline-block; font-weight:600; font-size:13px; letter-spacing:.04em; text-transform:uppercase; padding:3px 10px; border-radius:99px; color:#fff; }
   .v-yes{background:var(--yes)} .v-no{background:var(--no)} .v-maybe{background:var(--maybe)}
-  .v-not_applicable,.v-insufficient_evidence,.v-refused{background:var(--na)}
+  .v-not_applicable,.v-insufficient_evidence,.v-no_matching_study,.v-refused{background:var(--na)}
   .summary { font-size:18px; margin:12px 0 4px; }
   ul { padding-left:20px; margin:8px 0; } li { margin:6px 0; }
   .cite { font-size:13px; margin-left:4px; } .cite a { color:var(--accent); }
   .sources li { font-size:14px; } .sources a { color:var(--accent); }
   .meta { color:var(--muted); font-size:13px; }
+  .meta a { color:var(--accent); }
   .note { font-size:14px; color:var(--maybe); }
   h2 { font-size:15px; margin:16px 0 4px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
   .error { color:var(--no); }
@@ -68,7 +69,16 @@ function render(data) {
     return card;
   }
   const a = data.answer;
-  card.append(el("span", { class: `verdict v-${a.verdict}` }, a.verdict.replace("_", " ")), el("p", { class: "summary" }, a.summary));
+  if (a.primary_pmid) {
+    card.append(
+      el("span", { class: `verdict v-${a.study_verdict}` }, `study: ${a.study_verdict}`), " ",
+      el("span", { class: `verdict v-${a.verdict}` }, `wider evidence: ${a.verdict.replace("_", " ")}`),
+      el("p", { class: "meta" }, "Study the question describes: ", el("a", { href: `https://pubmed.ncbi.nlm.nih.gov/${a.primary_pmid}/`, target: "_blank", rel: "noopener" }, `PMID ${a.primary_pmid}`)),
+    );
+  } else {
+    card.append(el("span", { class: `verdict v-${a.verdict}` }, a.verdict.replace("_", " ")));
+  }
+  card.append(el("p", { class: "summary" }, a.summary));
   if (a.claims.length) {
     card.append(el("h2", {}, "Claims"));
     const ul = el("ul");

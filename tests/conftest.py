@@ -143,8 +143,12 @@ class InProcessToolbox:
         return raw
 
 
-def good_answer(*pmids: str, verdict: str = "no") -> Answer:
+def good_answer(
+    *pmids: str, verdict: str = "no", primary: str | None = None, study: str | None = None
+) -> Answer:
     return Answer(
+        primary_pmid=primary,
+        study_verdict=study or ("no_matching_study" if primary is None else verdict),
         verdict=verdict,
         summary="Vitamin D alone did not reduce hip fractures.",
         claims=[Claim(statement="Vitamin D alone did not reduce hip fractures.", pmids=list(pmids))],

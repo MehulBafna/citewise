@@ -7,8 +7,9 @@ and checks every citation before showing it. Claims that fail the check are remo
 Built with Claude (via LangChain), LangGraph, the Model Context Protocol, Qdrant and FastAPI.
 
 **Status: v1.** Agent, MCP server, guardrails, evaluation harness, tracing, API and demo page are
-in this repository, with 45 offline tests. The evaluation numbers below come from running
-`citewise-eval` with a real API key (see [Evaluate](#evaluate)).
+in this repository, with 61 offline tests. On 100 PubMedQA test questions the agent found the
+source study in 99% of cases and answered 68% correctly, 18 points above Claude without retrieval;
+when it committed to an answer it was as accurate as Claude handed the paper (see [Results](#results)).
 
 ## How it fits together
 
@@ -40,12 +41,15 @@ The agent is a LangGraph state graph (`src/citewise/agent.py`):
 3. **research** (main model) calls the MCP tools: search PubMed, read abstracts, search the index.
    A tool budget caps the loop.
 4. **tools** runs each call with the evidence policy injected, then filters the results again.
-5. **gather** always runs a semantic search of the index for the question, so the answer is
-   grounded even if the model searched poorly. If the model made no tool calls, gather searches
-   PubMed for it first.
-6. **answer** (main model) answers from the evidence only, as claims that each cite PMIDs.
+5. **gather** always runs a plain keyword search of PubMed for the question and reads the top three
+   abstracts, then a semantic search of the index, so the answer is grounded even if the model
+   searched poorly. If the model made no tool calls, gather also runs its suggested searches.
+6. **answer** (main model) answers from the evidence only, as claims that each cite PMIDs, with
+   two verdicts: what **the study the question describes** found (if one of the retrieved papers is
+   that study), and what **the evidence as a whole** suggests. A user asking "does X reduce Y in Z?"
+   sees both the matching study's result and whether older studies agree.
 7. **verify** checks the citations, then asks the fast model whether the cited passages support each
-   claim. A failing answer goes back once with the problems listed; claims that still fail are
+   claim. A study verdict must name a retrieved paper and be backed by a claim citing it. A failing answer goes back once with the problems listed; claims that still fail are
    removed, and if nothing survives the verdict becomes `insufficient_evidence`.
 
 The knowledge service is a separate MCP server (`src/citewise/mcp_server.py`). The agent loads its
@@ -67,41 +71,143 @@ Claude Desktop, can use the same server.
 
 [PubMedQA](https://github.com/pubmedqa/pubmedqa) (Jin et al., EMNLP 2019) has 1,000 expert-labelled
 yes/no/maybe questions; the official test split is 500. Each question is the title of a PubMed
-paper. `citewise-eval` compares three settings on the same questions:
+paper. `citewise-eval` compares four settings on the same questions:
 
 | Setting | What the model sees |
 | --- | --- |
-| `closed_book` | Nothing but the question. Claude answers from its own knowledge. |
-| `with_context` | The paper's own abstract without its conclusion: the standard PubMedQA setting, used as an upper reference point. |
-| `agent` | Whatever the agent finds in PubMed, **with the source paper excluded and only papers from earlier years allowed.** |
+| `closed_book` | Nothing but the question. Claude answers from its own knowledge (which may include the paper itself, from training). |
+| `with_context` | The paper's own abstract without its conclusion: the standard PubMedQA setting, the upper reference point. |
+| `find_and_read` | Whatever the agent finds in PubMed. It must **find the question's own paper itself**, sees it only as the abstract without its conclusion, and every other paper must be from earlier years. This is the retrieval setting and the headline number. |
+| `agent` | Whatever the agent finds, **with the source paper excluded and only earlier papers allowed**: it must forecast the study's result from prior literature. The hard case. |
 
-The `agent` setting is the honest one. Without the exclusion the agent would simply find the
-question's own paper and read the answer in its conclusion; without the year limit it could read
-later papers that cite it. Both rules go through the same evidence policy as in production, and the
-report counts any question where the source paper still reached the evidence (it must be 0).
+`find_and_read` against `with_context` measures what retrieval costs: both see the same abstract,
+but one is handed it and the other has to find it among PubMed's records. The report gives how
+often the agent found the source paper. Every rule goes through the same evidence policy as in
+production, and the report counts any question where forbidden text (an excluded or newer paper,
+or the source paper's conclusion) reached the evidence: it must be 0.
+
+Before a paid run, a free check says how often a plain PubMed search finds each source paper
+(no model calls):
 
 ```bash
-citewise-eval --download --limit 100                      # 100 random test questions, 3 settings
-citewise-eval --limit 500 --modes agent --concurrency 3   # the full test split, agent only
-citewise-eval --limit 30 --modes agent --gate agent:0.55  # exit code 2 if accuracy < 0.55
+citewise-eval --download --check-retrieval --split test --limit 100
 ```
 
-Results are written per question to `results/<model>/<mode>.jsonl`, so an interrupted run resumes
-where it stopped, and summarised in `results/<model>/report.md` and `report.json`: accuracy and
-macro-F1 with bootstrap 95% intervals, paired differences between settings on the same questions,
-mean tokens and latency, and agent behaviour (tool calls, claims removed by the verifier,
-`insufficient_evidence` rate).
+### Protocol: tune on dev, report on test
+
+PubMedQA's 1,000 labelled questions split into the official **test** set (500) and a **dev** set
+(the other 500). Every design choice, such as the verdict policy or the tool budget, is compared on
+dev. The test split is run once with the chosen configuration, and that is the number reported.
+
+```bash
+# compare two agent configurations on 50 dev questions
+citewise-eval --download --split dev --limit 50 --modes agent --policy strict
+citewise-eval --split dev --limit 50 --modes agent --policy best_supported
+citewise-eval --compare results/<model>/dev/agent-strict-t6.jsonl results/<model>/dev/agent-best_supported-t6.jsonl
+
+# the reported numbers: the chosen configuration, once, on the test split
+citewise-eval --split test --limit 100 --modes closed_book,with_context,find_and_read
+```
+
+Results are written per question to `results/<model>/<split>/`: `closed_book.jsonl` and
+`with_context.jsonl` for the baselines, and `<setting>-<policy>-t<tool budget>.jsonl` for each agent
+setting and configuration, so answers from different configurations never mix and an interrupted run resumes
+where it stopped. Samples are nested: `--limit 100` contains every question of `--limit 30` with the
+same seed, so a larger run reuses the answers already saved. Each run writes
+`report-<configuration>.md` and `.json`: accuracy and macro-F1 with bootstrap 95% intervals, paired
+differences between settings on the same questions, and agent behaviour (tool calls, claims removed
+by the verifier, `insufficient_evidence` rate). `--gate agent:0.55` exits with code 2 if accuracy
+falls below 0.55, for CI.
+
+### Abstention: two verdict policies and two extra metrics
+
+The agent may answer `insufficient_evidence`, which PubMedQA scores as `maybe`. With only earlier
+literature allowed, the evidence is often indirect, so a cautious agent abstains a lot, and plain
+accuracy then hides how often it is right when it does commit. The report therefore also gives, for
+every setting, **how often it commits to yes or no** and **its accuracy on those committed answers**.
+
+Two verdict policies (`--policy`, or `CITEWISE_VERDICT_POLICY`):
+
+- `strict` (default): abstain unless the documents answer the question.
+- `best_supported`: give the verdict the evidence leans toward, say in the summary when the evidence
+  is indirect, and abstain only when nothing relevant was found.
+
+Both keep every guardrail: each claim must still cite a retrieved paper and pass the support check.
 
 ### Results
 
-_Not run yet. Run `citewise-eval --download --limit 100` and paste `results/<model>/report.md` here._
+_First run, 30 test questions, `strict` policy, tool budget 6 (too few questions for firm
+conclusions; the intervals are about ±17 points):_ closed_book 63.3%, with_context 86.7%, agent
+50.0%. The agent committed to yes or no on 12 of 30 questions and was right on 11 of them; 14 of its
+15 errors were abstentions on questions whose answer was yes or no. The source paper reached the
+evidence on 0 questions. That finding motivated the dev-split comparison of the two verdict policies.
+
+_Dev comparison of the verdict policies (50 dev questions, earlier-literature setting):_ strict
+24.0%, best_supported 28.0%, a difference of -4.0 points (95% CI -14 to +6): no measurable
+difference, so `strict` stays the default (fewer claims removed by the verifier, 14% fewer tokens).
+Under both policies the agent answered maybe on most questions: excluding the source paper turns
+PubMedQA into forecasting a study's result from prior literature, which motivated `find_and_read`.
+
+**Version a1 test results: 100 test questions, Claude Sonnet 5.5, `strict` policy, tool budget 6**
+
+| Setting | Accuracy (95% CI) | Commits to yes/no | Accuracy when committed (95% CI) |
+| --- | ---: | ---: | ---: |
+| `closed_book` | 50.0% (40.0 to 60.0) | 71% | 63.4% (52.1 to 74.6) |
+| `with_context` | 77.0% (69.0 to 85.0) | 83% | 81.9% (73.5 to 90.4) |
+| `find_and_read` | 49.0% (39.0 to 59.0) | 57% | 71.9% (59.6 to 82.5) |
+
+- **Retrieval works.** The agent found the source paper in 84% of questions (a plain keyword search
+  finds it in the top 10 for 98%, see `citewise-eval --check-retrieval`).
+- **Reasoning works when it commits.** On the 50 questions where it found the paper and answered
+  yes or no, it was right 74% of the time, against 78% for `with_context` on the same questions.
+- **The gap is hedging.** After finding the paper it still answered maybe on 34 questions, 29 of
+  which had a yes or no answer: it weighs the source study together with older studies it also
+  retrieved (about 4 papers per question), and when they disagree it says maybe. `with_context`,
+  which sees only the source abstract, got 22 of those 34 right. A research assistant should weigh
+  the literature; PubMedQA asks about one study. Closing that gap without tuning to the benchmark
+  is the next step.
+
+**Version a2** addresses both losses: the answer now gives a separate verdict for the study the
+question describes (PubMedQA scores that one; the wider-evidence verdict is still reported), and
+gather always runs the plain keyword search, which finds the source paper in the top 10 for 98% of
+questions. Result files carry the version (`find_and_read-strict-t6-a2.jsonl`), so the a1 and a2
+runs never mix.
+
+**Version a2 test results: the same 100 test questions, Claude Sonnet 5.5, `strict`, tool budget 6**
+
+| Setting | Accuracy (95% CI) | Commits to yes/no | Accuracy when committed (95% CI) |
+| --- | ---: | ---: | ---: |
+| `closed_book` | 50.0% (40.0 to 60.0) | 71% | 63.4% (52.1 to 74.6) |
+| `with_context` | 77.0% (69.0 to 85.0) | 83% | 81.9% (73.5 to 90.4) |
+| `find_and_read` a1 | 49.0% (39.0 to 59.0) | 57% | 71.9% (59.6 to 82.5) |
+| `find_and_read` a2 | **68.0%** (59.0 to 77.0) | 73% | **82.2%** (74.0 to 90.4) |
+
+- **a2 against a1:** +19 points (95% CI +11 to +27).
+- **Retrieval now clearly helps:** +18 points over `closed_book` (95% CI +6 to +29).
+- **Finding the paper still costs a little:** -9 points against `with_context`, which is handed the
+  abstract (95% CI -16 to -3). When the agent commits to an answer it is as accurate as
+  `with_context` (82.2% against 81.9%).
+- **Retrieval:** the agent found the source paper in 99% of questions and named it as the study
+  asked about in 94%.
+- **Guardrails held:** forbidden text reached the evidence on 0 questions; the verifier removed
+  unsupported claims from 26% of answers. About 19,000 tokens and 45 seconds per question.
+- **Dev check (50 dev questions):** `find_and_read` a2 78.0% against `with_context` 74.0% (+4 points,
+  95% CI -4 to +12).
+
+A caveat on method: the a2 changes were designed after inspecting a1's errors on these same test
+questions, so the dev result, on questions not used for that analysis, is the cleaner confirmation
+that the improvement generalises. A fresh sample of test questions would be cleaner still.
+- **Overall**, `find_and_read` and `closed_book` cannot be told apart (-1 point, 95% CI -13 to +11).
+  Claude may also remember these papers from training, so `closed_book` is not a no-information
+  baseline.
+- **Guardrails held (v1).** Forbidden text (an excluded or newer paper, or the source paper's conclusion)
+  reached the evidence on 0 questions, and the verifier removed unsupported claims from 26% of
+  answers. Mean cost: about 17,000 tokens and 35 seconds per question.
 
 How to read them: `with_context` should score highest because the model reads the paper itself.
 The interesting comparison is `agent` against `closed_book`: does retrieving earlier literature
 help beyond what the model already knows? If the paired interval contains zero, the data cannot
-tell them apart, and the report says so. Agent answers of `insufficient_evidence` are scored as
-`maybe`, which costs accuracy when the true label is yes or no; that is the price of refusing to
-guess.
+tell them apart, and the report says so.
 
 ## Observability
 
@@ -131,7 +237,7 @@ Without Docker (macOS/Linux; on Windows use `.venv\Scripts\activate`, or a conda
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest                          # 45 tests, offline, no API key needed
+pytest                          # 61 tests, offline, no API key needed
 
 citewise-ask "Does vitamin D supplementation reduce fracture risk in older adults?"
 citewise-api                    # http://127.0.0.1:8000
@@ -165,6 +271,7 @@ values if you run both at once.
 | `CITEWISE_MODEL` | `claude-sonnet-5-5` | Research and answer model |
 | `CITEWISE_FAST_MODEL` | `claude-haiku-5-5` | Triage and citation-support model |
 | `CITEWISE_MAX_TOOL_CALLS` | `6` | Tool budget per question |
+| `CITEWISE_VERDICT_POLICY` | `strict` | `strict` abstains unless the evidence answers the question; `best_supported` commits to what the evidence leans toward |
 | `CITEWISE_CHECK_SUPPORT` | `1` | Set `0` to skip the model support check (citation checks always run) |
 | `CITEWISE_MAX_TOKENS` | `8192` | Output token limit per call, with room for adaptive thinking |
 | `CITEWISE_EFFORT` | | Optional reasoning effort (`low`, `medium`, `high`) |
@@ -178,7 +285,7 @@ values if you run both at once.
 
 ## Tests
 
-`pytest` runs 45 tests with no network and no API key, against a small set of clearly synthetic
+`pytest` runs 61 tests with no network and no API key, against a small set of clearly synthetic
 papers (`tests/fixtures/papers.json`, PMIDs 90000001 to 90000008). Besides unit tests they cover:
 
 - **The real MCP path**: the server runs as a subprocess and the agent talks to it over stdio through
@@ -206,7 +313,7 @@ src/citewise/
   api.py           FastAPI: /ask, /health, demo page, rate limit, daily budget
   cli.py           citewise-ask
   eval/            PubMedQA loader, runner, metrics, report, citewise-eval
-tests/             45 offline tests
+tests/             61 offline tests
 ```
 
 ## Limits

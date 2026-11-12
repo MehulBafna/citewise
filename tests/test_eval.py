@@ -135,3 +135,105 @@ def test_quality_gates_parse() -> None:
     assert parse_gates(["agent:0.6", "closed_book:0.5"]) == {"agent": 0.6, "closed_book": 0.5}
     with pytest.raises(SystemExit):
         parse_gates(["nonsense"])
+
+
+def test_dev_split_is_everything_labelled_outside_the_test_set(data_dir: Path) -> None:
+    assert [i.pmid for i in load_items(data_dir, "dev")] == ["1"]
+    test = {i.pmid for i in load_items(data_dir, "test")}
+    assert not test & {i.pmid for i in load_items(data_dir, "dev")}
+
+
+def test_committed_answers_are_measured_separately() -> None:
+    from citewise.eval.report import summarize_mode
+
+    records = [
+        {"pmid": "1", "label": "yes", "pred": "yes", "error": None},
+        {"pmid": "2", "label": "no", "pred": "no", "error": None},
+        {"pmid": "3", "label": "yes", "pred": "maybe", "error": None},
+        {"pmid": "4", "label": "no", "pred": "yes", "error": None},
+    ]
+    s = summarize_mode(records)
+    assert s["accuracy"] == 0.5
+    assert s["committed"] == 3 and s["coverage"] == 0.75
+    assert s["accuracy_when_committed"] == pytest.approx(2 / 3)
+
+
+def test_two_runs_are_compared_on_their_common_questions() -> None:
+    from citewise.eval.report import compare_runs
+
+    a = [{"pmid": p, "label": "yes", "pred": "yes", "error": None} for p in "123"]
+    b = [{"pmid": p, "label": "yes", "pred": "maybe", "error": None} for p in "1234"]
+    text = compare_runs(a, b, "strict", "best")
+    assert "Comparison on 3 questions" in text
+    assert "| strict | 100.0%" in text and "| best | 0.0%" in text
+    assert "strict minus best: +100.0 points" in text
+
+
+def test_each_agent_configuration_gets_its_own_results_file(tmp_path: Path) -> None:
+    from citewise.eval.cli import agent_tag, results_file
+
+    s = settings(verdict_policy="best_supported", max_tool_calls=4)
+    assert agent_tag(s, same_year_ok=False) == "best_supported-t4-a2"
+    assert agent_tag(s, same_year_ok=True) == "best_supported-t4-a2-sameyear"
+    assert results_file(tmp_path, "agent", "best_supported-t4").name == "agent-best_supported-t4.jsonl"
+    assert results_file(tmp_path, "closed_book", "best_supported-t4").name == "closed_book.jsonl"
+
+
+def test_find_and_read_policy_and_leak_check(data_dir: Path) -> None:
+    from citewise.eval.pubmedqa import find_and_read_policy
+    from citewise.eval.runner import leaked
+
+    item = load_items(data_dir)[0]  # 90000001, 2014, contexts with BACKGROUND/RESULTS labels
+    policy = find_and_read_policy(item)
+    assert policy.max_year == 2013 and set(policy.masked) == {"90000001"}
+    assert policy.masked["90000001"] == "BACKGROUND: Context one.\nRESULTS: Context two."
+
+    def doc(year: int, text: str) -> dict:
+        return {"title": "t", "year": year, "journal": "j", "passages": {"ABSTRACT": text}}
+
+    clean = {"90000001": doc(2014, "masked text"), "90000002": doc(2012, "older paper")}
+    assert not leaked(item, clean, policy)
+    assert leaked(item, {**clean, "90000005": doc(2015, "a newer paper")}, policy)
+    assert leaked(item, {"90000001": doc(2014, "it says Conclusion. right here")}, policy)
+
+
+async def test_find_and_read_runs_and_reports_the_source_found_rate(data_dir: Path, tmp_path: Path) -> None:
+    items = load_items(data_dir)
+    llm = FakeLLM(answers=[good_answer("90000002", verdict="no")])
+    agent = CitewiseAgent(llm, InProcessToolbox(), settings())
+    records = await run_mode("find_and_read", items, llm, agent, tmp_path / "f.jsonl", progress=False)
+    assert all(r["error"] is None and not r["leaked"] for r in records)
+    assert {r["pmid"]: r["found_source"] for r in records}["90000001"] is True
+    report = build_report(
+        {"find_and_read": records},
+        {"split": "test", "items": 3, "seed": 0, "model": "fake", "fast_model": "fake"},
+    )
+    assert 0 < report["modes"]["find_and_read"]["source_found_rate"] <= 1
+    assert "found the source paper" in render_markdown(report)
+
+
+def test_retrieval_check_counts_where_the_source_paper_ranks(data_dir: Path) -> None:
+    from citewise.eval.retrieval_check import check_retrieval, keyword_query, render_retrieval
+    from citewise.pubmed import OfflinePubMed
+    from tests.conftest import PAPERS
+
+    assert keyword_query("Does vitamin D reduce hip fracture risk in adults over 65?") == (
+        "vitamin reduce hip fracture risk adults over 65"
+    )
+    result = check_retrieval(load_items(data_dir), OfflinePubMed(PAPERS))
+    assert result["questions"] == 3
+    ranks = {row["pmid"]: row for row in result["rows"]}
+    assert ranks["90000001"]["keyword_rank"] is not None
+    assert result["summary"]["either"]["top_10"] > 0
+    assert "Top 10" in render_retrieval(result)
+
+
+async def test_scoring_uses_the_study_verdict_when_there_is_one(data_dir: Path, tmp_path: Path) -> None:
+    items = [i for i in load_items(data_dir) if i.pmid == "90000001"]  # label: no
+    # the study says no (correct); the wider evidence says maybe
+    answer = good_answer("90000001", verdict="maybe", primary="90000001", study="no")
+    llm = FakeLLM(answers=[answer])
+    agent = CitewiseAgent(llm, InProcessToolbox(), settings())
+    [record] = await run_mode("find_and_read", items, llm, agent, tmp_path / "s.jsonl", progress=False)
+    assert record["study_verdict"] == "no" and record["verdict"] == "maybe"
+    assert record["pred"] == "no" and record["primary_is_source"] is True

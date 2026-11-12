@@ -1,0 +1,108 @@
+{
+  "generated_at": "2026-11-12T11:44:15+00:00",
+  "split": "dev",
+  "items": 50,
+  "seed": 0,
+  "model": "claude-sonnet-5-5",
+  "fast_model": "claude-haiku-5-5",
+  "verdict_policy": "strict",
+  "max_tool_calls": 6,
+  "same_year_ok": false,
+  "modes": {
+    "closed_book": {
+      "items": 50,
+      "completed": 50,
+      "errors": 0,
+      "accuracy": 0.48,
+      "accuracy_ci95": [
+        0.34,
+        0.62
+      ],
+      "macro_f1": 0.45883825453717936,
+      "macro_f1_ci95": [
+        0.31303740226397475,
+        0.5858334016295474
+      ],
+      "confusion": {
+        "yes": {
+          "yes": 13,
+          "no": 5,
+          "maybe": 5
+        },
+        "no": {
+          "yes": 4,
+          "no": 6,
+          "maybe": 8
+        },
+        "maybe": {
+          "yes": 2,
+          "no": 2,
+          "maybe": 5
+        }
+      },
+      "mean_tokens": 576.02,
+      "mean_seconds": 2.923,
+      "committed": 32,
+      "coverage": 0.64,
+      "accuracy_when_committed": 0.59375,
+      "accuracy_when_committed_ci95": [
+        0.40625,
+        0.75
+      ]
+    },
+    "agent": {
+      "items": 50,
+      "completed": 50,
+      "errors": 0,
+      "accuracy": 0.24,
+      "accuracy_ci95": [
+        0.12,
+        0.36
+      ],
+      "macro_f1": 0.21508563899868247,
+      "macro_f1_ci95": [
+        0.11085500915908886,
+        0.32577040538076846
+      ],
+      "confusion": {
+        "yes": {
+          "yes": 4,
+          "no": 2,
+          "maybe": 17
+        },
+        "no": {
+          "yes": 4,
+          "no": 1,
+          "maybe": 13
+        },
+        "maybe": {
+          "yes": 1,
+          "no": 1,
+          "maybe": 7
+        }
+      },
+      "mean_tokens": 22595.3,
+      "mean_seconds": 31.805,
+      "committed": 13,
+      "coverage": 0.26,
+      "accuracy_when_committed": 0.38461538461538464,
+      "accuracy_when_committed_ci95": [
+        0.15384615384615385,
+        0.6153846153846154
+      ],
+      "mean_tool_calls": 5.9,
+      "mean_claims": 3.08,
+      "answers_with_removed_claims": 0.22,
+      "insufficient_evidence_rate": 0.28,
+      "leaked_items": 0
+    }
+  },
+  "paired_accuracy": {
+    "agent_minus_closed_book": {
+      "items": 50,
+      "difference": -0.24,
+      "ci95_low": -0.38000000000000006,
+      "ci95_high": -0.09999999999999998
+    }
+  }
+}

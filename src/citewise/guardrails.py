@@ -67,23 +67,58 @@ POLICY_PARAMS = ("exclude_pmids", "max_year")
 
 @dataclass(frozen=True)
 class EvidencePolicy:
-    """What the agent may read. The evaluation uses it to keep the answer's own paper out of reach."""
+    """What the agent may read. The evaluation uses it to control what reaches the evidence.
+
+    exclude_pmids  papers that must never be read.
+    max_year       only papers published up to this year may be read.
+    masked         papers that may be read even if newer than max_year, but whose text is replaced
+                   (PMID -> replacement). The find-and-read evaluation uses it to let the agent find
+                   a question's source paper while hiding that paper's conclusion.
+    """
 
     exclude_pmids: frozenset[str] = field(default_factory=frozenset)
     max_year: int | None = None
+    masked: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def filters_years_on_server(self) -> bool:
+        # A masked paper may be newer than max_year, so PubMed must not filter by date: the agent
+        # filters every other paper by year itself.
+        return self.max_year is not None and not self.masked
 
     def tool_args(self) -> dict[str, Any]:
         args: dict[str, Any] = {}
         if self.exclude_pmids:
             args["exclude_pmids"] = sorted(self.exclude_pmids)
-        if self.max_year is not None:
+        if self.filters_years_on_server:
             args["max_year"] = self.max_year
         return args
 
     def allows(self, pmid: str, year: int | None) -> bool:
         if pmid in self.exclude_pmids:
             return False
+        if pmid in self.masked:
+            return True
         return self.max_year is None or (year is not None and year <= self.max_year)
+
+    def mask(self, item: dict[str, Any]) -> dict[str, Any]:
+        """The item as the agent may see it: masked papers get their replacement text."""
+        pmid = str(item.get("pmid", ""))
+        if pmid not in self.masked:
+            return item
+        text = self.masked[pmid]
+        item = dict(item)
+        if "abstract" in item:
+            item["abstract"] = text
+        if "text" in item:
+            item["text"] = text
+            item["section"] = MASKED_SECTION
+        if "snippet" in item:
+            item["snippet"] = text[:280]
+        return item
+
+
+MASKED_SECTION = "ABSTRACT WITHOUT CONCLUSION"
 
 
 def wrap_document(pmid: str, title: str, year: int | None, body: str) -> str:

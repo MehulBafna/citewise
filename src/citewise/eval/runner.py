@@ -8,12 +8,14 @@ import time
 from pathlib import Path
 from typing import Any
 
-from citewise.agent import CitewiseAgent
-from citewise.eval.pubmedqa import Item, leakage_policy, to_label
+from citewise.agent import CitewiseAgent, document_body
+from citewise.eval.pubmedqa import Item, find_and_read_policy, leakage_policy, to_label
 from citewise.llm import LLM
+from citewise.schemas import STUDY_ANSWERS
 from citewise.tracing import Trace, current_trace
 
-MODES = ("closed_book", "with_context", "agent")
+MODES = ("closed_book", "with_context", "find_and_read", "agent")
+AGENT_MODES = ("agent", "find_and_read")
 
 
 async def run_item(
@@ -35,23 +37,34 @@ async def run_item(
         elif mode == "with_context":
             reply = await llm.with_context(item.question, list(item.contexts))
             record.update(pred=reply.verdict, verdict=reply.verdict)
-        elif mode == "agent":
+        elif mode in AGENT_MODES:
             if agent is None:
-                raise ValueError("agent mode needs an agent")
-            policy = leakage_policy(item, same_year_ok=same_year_ok)
+                raise ValueError(f"{mode} mode needs an agent")
+            if mode == "agent":
+                policy = leakage_policy(item, same_year_ok=same_year_ok)
+            else:
+                policy = find_and_read_policy(item)
             result = await agent.run(item.question, policy)
             answer = result.answer
             verdict = answer.verdict if answer else (result.refusal_reason or "refused")
+            study = answer.study_verdict if answer else "no_matching_study"
+            primary = answer.primary_pmid if answer else None
             cited = sorted({p for c in answer.claims for p in c.pmids}) if answer else []
+            # PubMedQA asks what one study found: score the study verdict when the agent gave one,
+            # otherwise its verdict on the evidence as a whole.
             record.update(
-                pred=to_label(verdict),
+                pred=to_label(study if study in STUDY_ANSWERS else verdict),
                 verdict=verdict,
+                study_verdict=study,
+                primary_pmid=primary,
+                primary_is_source=primary == item.pmid,
                 status=result.status,
                 claims=len(answer.claims) if answer else 0,
                 removed_claims=len(result.removed_claims),
                 cited_pmids=cited,
                 evidence_pmids=sorted(result.evidence),
-                leaked=item.pmid in cited or item.pmid in result.evidence,
+                leaked=leaked(item, result.evidence, policy),
+                found_source=item.pmid in result.evidence,
                 tool_calls=len(result.tool_calls),
             )
             # The agent keeps its own trace for the run; take the numbers from it.
@@ -69,6 +82,21 @@ async def run_item(
         record["usage"] = trace.usage
     record["ms"] = round((time.perf_counter() - start) * 1000)
     return record
+
+
+def leaked(item: Item, evidence: dict[str, dict[str, Any]], policy: Any) -> bool:
+    """True if anything the policy forbids reached the evidence: an excluded paper, a paper newer
+    than the year limit, or the source paper's conclusion."""
+    for pmid, doc in evidence.items():
+        if pmid in policy.exclude_pmids:
+            return True
+        if pmid not in policy.masked and policy.max_year is not None:
+            if doc.get("year") is None or doc["year"] > policy.max_year:
+                return True
+    probe = " ".join(item.long_answer.split())[:80]
+    if probe:
+        return any(probe in " ".join(document_body(doc).split()) for doc in evidence.values())
+    return False
 
 
 def read_records(path: Path) -> dict[str, dict[str, Any]]:

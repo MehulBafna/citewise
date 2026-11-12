@@ -1,0 +1,111 @@
+{
+  "generated_at": "2026-11-12T13:31:24+00:00",
+  "split": "dev",
+  "items": 50,
+  "seed": 0,
+  "model": "claude-sonnet-5-5",
+  "fast_model": "claude-haiku-5-5",
+  "verdict_policy": "strict",
+  "max_tool_calls": 6,
+  "same_year_ok": false,
+  "modes": {
+    "with_context": {
+      "items": 50,
+      "completed": 50,
+      "errors": 0,
+      "accuracy": 0.74,
+      "accuracy_ci95": [
+        0.62,
+        0.86
+      ],
+      "macro_f1": 0.663685152057245,
+      "macro_f1_ci95": [
+        0.53461210571185,
+        0.7916670531849103
+      ],
+      "confusion": {
+        "yes": {
+          "yes": 18,
+          "no": 1,
+          "maybe": 4
+        },
+        "no": {
+          "yes": 0,
+          "no": 16,
+          "maybe": 2
+        },
+        "maybe": {
+          "yes": 2,
+          "no": 4,
+          "maybe": 3
+        }
+      },
+      "mean_tokens": 1003.56,
+      "mean_seconds": 2.309,
+      "committed": 41,
+      "coverage": 0.82,
+      "accuracy_when_committed": 0.8292682926829268,
+      "accuracy_when_committed_ci95": [
+        0.7073170731707317,
+        0.926829268292683
+      ]
+    },
+    "find_and_read": {
+      "items": 50,
+      "completed": 50,
+      "errors": 0,
+      "accuracy": 0.78,
+      "accuracy_ci95": [
+        0.66,
+        0.88
+      ],
+      "macro_f1": 0.7193732193732193,
+      "macro_f1_ci95": [
+        0.5685520037824855,
+        0.8463900316650463
+      ],
+      "confusion": {
+        "yes": {
+          "yes": 20,
+          "no": 2,
+          "maybe": 1
+        },
+        "no": {
+          "yes": 1,
+          "no": 15,
+          "maybe": 2
+        },
+        "maybe": {
+          "yes": 1,
+          "no": 4,
+          "maybe": 4
+        }
+      },
+      "mean_tokens": 19984.0,
+      "mean_seconds": 43.794,
+      "committed": 43,
+      "coverage": 0.86,
+      "accuracy_when_committed": 0.813953488372093,
+      "accuracy_when_committed_ci95": [
+        0.6976744186046512,
+        0.9302325581395349
+      ],
+      "mean_tool_calls": 6.64,
+      "mean_claims": 4.12,
+      "answers_with_removed_claims": 0.28,
+      "insufficient_evidence_rate": 0.0,
+      "leaked_items": 0,
+      "source_found_rate": 1.0,
+      "study_verdict_rate": 0.98,
+      "primary_is_source_rate": 0.98
+    }
+  },
+  "paired_accuracy": {
+    "find_and_read_minus_with_context": {
+      "items": 50,
+      "difference": 0.040000000000000036,
+      "ci95_low": -0.039999999999999925,
+      "ci95_high": 0.12
+    }
+  }
+}

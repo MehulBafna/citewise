@@ -7,6 +7,8 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 Verdict = Literal["yes", "no", "maybe", "not_applicable", "insufficient_evidence"]
+StudyVerdict = Literal["yes", "no", "maybe", "no_matching_study"]
+STUDY_ANSWERS = ("yes", "no", "maybe")
 
 
 class Triage(BaseModel):
@@ -32,11 +34,25 @@ class Claim(BaseModel):
 
 
 class Answer(BaseModel):
-    """An answer grounded in the evidence documents."""
+    """An answer grounded in the evidence documents, with two verdicts: what the study the question
+    describes found, and what the evidence as a whole suggests."""
 
+    primary_pmid: str | None = Field(
+        description=(
+            "PMID of the document that is the study the question describes (same intervention or "
+            "exposure, outcome and population). null if no document is that study."
+        )
+    )
+    study_verdict: StudyVerdict = Field(
+        description=(
+            "What that study found, from its own results: yes, no, or maybe if its results are "
+            "mixed or conditional. no_matching_study if primary_pmid is null."
+        )
+    )
     verdict: Verdict = Field(
         description=(
-            "For a yes/no question: yes, no, or maybe (evidence mixed or conditional). "
+            "What the evidence as a whole suggests. For a yes/no question: yes, no, or maybe "
+            "(evidence mixed or conditional). "
             "not_applicable for other questions. insufficient_evidence if the documents do not "
             "answer the question."
         )

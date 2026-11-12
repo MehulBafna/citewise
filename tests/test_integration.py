@@ -54,6 +54,8 @@ STRUCTURED = {
         "search_queries": ["vitamin D hip fracture"],
     },
     "Answer": {
+        "primary_pmid": "90000003",
+        "study_verdict": "no",
         "verdict": "no",
         "summary": "Vitamin D alone did not reduce fractures.",
         "claims": [
@@ -70,7 +72,7 @@ STRUCTURED = {
 
 SCHEMA_BY_FIELDS = {
     frozenset({"category", "reason", "search_queries"}): "Triage",
-    frozenset({"verdict", "summary", "claims"}): "Answer",
+    frozenset({"primary_pmid", "study_verdict", "verdict", "summary", "claims"}): "Answer",
     frozenset({"checks"}): "SupportReport",
     frozenset({"reasoning", "verdict"}): "QuickAnswer",
 }
@@ -199,3 +201,15 @@ async def test_the_older_forced_tool_method_still_works_where_supported(mock_ant
     llm, _ = _claude(mock_anthropic, model="claude-haiku-5-5", structured_output="function_calling")
     assert (await llm.closed_book("Does vitamin D prevent fractures?")).verdict == "no"
     assert mock_anthropic.requests[-1]["tool_choice"]["name"] == "QuickAnswer"
+
+
+async def test_the_verdict_policy_selects_the_answer_instructions(mock_anthropic) -> None:
+    llm, s = _claude(mock_anthropic, verdict_policy="best_supported")
+    await llm.answer("Does vitamin D prevent fractures?", '<document pmid="1">x</document>', None)
+    system = json.dumps(mock_anthropic.requests[-1]["system"])
+    assert "best supports" in system and "indirect" in system
+    strict, _ = _claude(mock_anthropic)
+    await strict.answer("Does vitamin D prevent fractures?", '<document pmid="1">x</document>', None)
+    assert "best supports" not in json.dumps(mock_anthropic.requests[-1]["system"])
+    with pytest.raises(ValueError):
+        _claude(mock_anthropic, verdict_policy="lenient")

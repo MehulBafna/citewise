@@ -45,6 +45,9 @@ class Settings:
     # Agent limits.
     max_tool_calls: int = field(default_factory=lambda: _int("CITEWISE_MAX_TOOL_CALLS", 6))
     max_answer_attempts: int = field(default_factory=lambda: _int("CITEWISE_MAX_ATTEMPTS", 2))
+    # strict: abstain unless the documents answer the question. best_supported: commit to the
+    # verdict the evidence leans toward, saying when it is indirect.
+    verdict_policy: str = field(default_factory=lambda: os.environ.get("CITEWISE_VERDICT_POLICY", "strict"))
     check_support: bool = field(default_factory=lambda: os.environ.get("CITEWISE_CHECK_SUPPORT", "1") != "0")
 
     # Knowledge service (run by the MCP server).
